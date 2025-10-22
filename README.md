@@ -9,6 +9,7 @@
 - **链路治理**：集成熔断、限流（BBR）、重试、重写、CORS、Tracing、Logging 等中间件，可按端点或全局装配。
 - **服务发现**：对接 Kratos Registry 抽象（示例实现 Consul），支持 `discovery:///service` 与 `direct:///<host>` 目标地址。
 - **可观测性**：Prometheus 指标、结构化访问日志、调试端点 (`/debug/*`、`/metrics`)，便于排障与巡检。
+- **客户端负载均衡**：内置 Kratos `selector`，默认使用 Power-of-Two-Choices (P2C) 策略，并支持配置权重及重试过滤。
 
 ## 2. 目录结构速览
 
@@ -146,7 +147,7 @@ Gateway 的一次请求严格串行执行，从监听器到上游再回到客户
 
 ### 5.3 请求进入链路
 
-5. **入口准备**：`proxy/proxy.go:262-283` 设置 `X-Forwarded-For`，缓存请求体并重写 `req.GetBody`，构造 `RequestOptions` 存放端点元数据、选路结果与重试状态。
+5. **入口准备**：`proxy/proxy.go:262-283` 设置 `X-Forwarded-For`（JSON→gRPC 场景也会保留并转换为 gRPC metadata），缓存请求体并重写 `req.GetBody`，构造 `RequestOptions` 存放端点元数据、选路结果与重试状态。
 6. **整体超时**：`proxy/proxy.go:268-310` 应用端点级超时，并在每次尝试前使用 `prepareAttemptTimeoutContext` 衍生 per-try timeout。
 
 ### 5.4 中间件线性链（按执行顺序）
@@ -193,7 +194,7 @@ Gateway 的一次请求严格串行执行，从监听器到上游再回到客户
 
 ### 5.5 后端选择与调用
 
-8. **节点选择**：`client/client.go` 调用 selector（默认 P2C）挑选节点，结合 `RequestOptions.Filters` 避免重试命中相同失败节点；`client/node.go` 根据 `target` 解析 direct/discovery 并加载 TLS 客户端。
+8. **节点选择**：`client/client.go` 调用 Kratos `selector` 组件，默认使用 **P2C (power-of-two-choices)** 算法在可用节点间择优；支持 `weight`（direct 模式）与 `RequestOptions.Filters`（重试时剔除失败节点）；`client/node.go` 根据 `target` 解析 direct/discovery 并加载 TLS 客户端。
 9. **服务发现监听**：`client/servicewatch.go` 管理 registry watcher，缓存实例并暴露 `/debug/watcher/*`；实例变更时刷新 selector 节点列表。
 10. **HTTP RoundTrip**：设置 `req.URL/Host/Scheme`，调用对应 `http.Client`（HTTP、HTTPS、h2c）发起上游请求；响应返回后执行 `selector.DoneFunc` 上报结果。
 
@@ -205,6 +206,16 @@ Gateway 的一次请求严格串行执行，从监听器到上游再回到客户
 
 整条链路保持串行执行，只有在重试触发时才会按相同顺序重新走一遍完整流程。
 
+### 5.7 请求上下文与状态传递
+
+- **RequestOptions**：`middleware/request.go` 在入口阶段注入 `RequestOptions`，记录当前 endpoint、已访问的 backend 列表、上游状态码与耗时、是否为最后一次尝试、Selector 过滤器、`DoneFunc` 等。每个中间件、客户端都从该结构读取/写入状态，避免通过 context 反复取值。
+- **重试过滤**：当某次尝试失败时，`RequestOptions.Filters` 会回写自定义 NodeFilter，下一次重试自动跳过失败节点，结合 P2C 进一步减轻雪崩。
+- **Selector.DoneFunc**：`client/client.go` 在完成上游请求后调用 `done(ctx, selector.DoneInfo{...})`，向负载均衡器反馈成功/失败，便于权重调整。
+- **上下行指标**：`proxy/proxy.go` 在复制响应体时，调用 `sentBytesAdd`、`receivedBytesAdd`、`requestsDurationObserve`、`requestsRetryStateIncr` 等函数积累 Prometheus 指标，所有标签通过 `middleware.NewMetricsLabels` 从 endpoint metadata (`service`、`basePath` 等) 衍生。
+- **gRPC 特殊处理**：gRPC 请求通过 `transcoder` 中间件封装帧头、剥离 Trailer，并确保在错误场景下填充 `grpc-status`/`grpc-message`。`writeError` 针对 gRPC 入口将 HTTP 错误映射为 gRPC status code，再返回 200，以满足 gRPC 协议要求。
+- **HTTP 客户端池**：`client/node.go` 为 HTTP、HTTPS、h2c 分别维护 `*http.Client`，TLS 模式可引用 `tls_store` 中的证书配置；默认拒绝自动跳转，可通过 `PROXY_FOLLOW_REDIRECT` 开启，并统计重定向次数。
+- **Feature Flag**：部分链路（如重试、优先级配置）依赖 `github.com/go-kratos/feature` 注册的开关（`gw:Retry`、`gw:PriorityConfig` 等），可通过控制面动态调整。
+
 ## 6. 可观测性与调试
 
 - **Prometheus 指标**：`/metrics`（禁止带 `X-Forwarded-For`）提供 `go_gateway_requests_code_total`、`go_gateway_requests_duration_seconds`、`go_gateway_requests_retry_state`、`go_gateway_requests_tx_bytes`、`go_gateway_requests_rx_bytes`、`go_gateway_client_redirect_total`、`go_gateway_requests_circuit_breaker_denied_total` 等。
@@ -215,13 +226,48 @@ Gateway 的一次请求严格串行执行，从监听器到上游再回到客户
   - `/debug/watcher/*` 观测服务发现缓存与 Applier 列表。
   - `/debug/pprof/*` 获取 CPU/内存等性能分析数据。
 
+### 6.1 审计日志（MVP 之后）
+
+- **目标**：在 MVP 之后补齐审计能力，记录关键访问行为并为后续 Pub/Sub → BigQuery 链路做准备。
+- **推荐字段**（建议统一使用 ISO-8601 UTC 时间）：
+
+| 字段 | 说明 | 是否建议 |
+| ---- | ---- | -------- |
+| `timestamp` | 请求开始或处理完成时间（ISO-8601） | ✅ |
+| `traceId` | 当前请求的 Trace/Correlation ID（与 `X-Trace-ID` 一致） | ✅ |
+| `userId` | 发起者的用户 ID / 服务账户 / 系统账户 | ✅ |
+| `userRole` | 用户角色或权限组 | 建议 |
+| `sourceIp` | 请求来源 IP | ✅ |
+| `clientId` | 客户端标识（App 版本、调用方服务、网关节点等） | 建议 |
+| `endpoint` | 访问的 API 路径或资源 URI | ✅ |
+| `httpMethod` | HTTP 方法（GET/POST/…） | ✅ |
+| `resourceId` | 被访问或变更的业务资源 ID | 建议 |
+| `operation` | 业务动作描述（如 `TRANSFER_FUNDS`） | 建议 |
+| `requestPayload` | 主要请求参数（敏感信息需脱敏/掩码） | 建议 |
+| `responseStatus` | HTTP 状态码或业务错误码 | ✅ |
+| `responsePayload` | 响应概要（敏感信息脱敏） | 建议 |
+| `outcome` | 操作结果（`SUCCESS`/`FAILURE`/`DENIED` 等） | ✅ |
+| `processingTimeMs` | 处理耗时（毫秒） | 建议 |
+| `service` | 执行请求的服务或网关节点名称/版本 | 建议 |
+| `environment` | 环境标识（prod/stage/dev） | 建议 |
+| `tags` | 可选标签（如 `sensitive`、`financial`） | 可选 |
+| `authorizationDecision` | 授权检查结果（`AUTHORIZED`/`UNAUTHORIZED`） | 建议 |
+| `reason` | 失败或拒绝原因（错误码、消息） | 建议 |
+| `deviceInfo` | 设备信息（User-Agent、客户端版本） | 可选 |
+| `location` | 地理位置/区域（如基于 IP 推断） | 可选 |
+| `auditLevel` | 审计级别（`INFO`/`AUDIT`/`SECURITY`） | 建议 |
+| `prevValue/newValue` | 修改操作的前后关键字段 | 可选 |
+
+- **实现建议**：先以结构化 JSON（stdout/落盘）验证字段与脱敏策略，再接入消息队列与数据仓库构建可靠链路（实时发布 + 落盘降级 + 补发）。
+
 ## 7. 常见运维要点
 
 - **大请求体重试**：Proxy 会 `io.ReadAll` 缓存请求体，大文件上传建议关闭重试或限制 `Content-Length`。
 - **优雅关闭**：路由热更新和进程退出都会等待正在处理的请求，超过 120 秒后强制关闭，可按业务调整。
 - **Feature Flag**：`gw:Retry`、`gw:PriorityConfig` 等开关通过 `github.com/go-kratos/feature` 控制，需在控制面同步管理。
 - **TLS 管理**：在配置 `tls_store` 后可重用证书，后端 `tls_config_name` 引用即可，避免重复加载。
-- **安全考量**：默认拒绝带 `X-Forwarded-For` 的 `/metrics` 请求，若需开放应通过内网反代或额外鉴权。
+- **安全考量**：默认拒绝带 `X-Forwarded-For` 的 `/metrics` 请求；来源网段校验、HTTP 安全头等增强能力计划在 MVP 之后补齐（详见 TODO 8）。
+- **过载保护规划**：当前未限制整体并发，后续将按 TODO 9 引入信号量/`Retry-After` 控制，避免突发流量拖垮后端。
 
 ## 8. 集成建议
 
@@ -238,3 +284,12 @@ go test ./proxy ./config ./middleware/... ./client/...
 ```
 
 覆盖面包括重试、熔断、配置热更新等关键链路，建议在接入自定义中间件或控制面前补充对应集成测试。
+
+## 9. 当前限制与后续计划
+
+- **Problem Details**：目前错误仍为默认文本/状态码输出，计划在 TODO 5 中补齐 RFC 7807 结构化响应，附带 TraceID 等上下文。
+- **入口 TraceID**：现有 tracing 中间件只在下游请求创建 Span，尚未在入口统一生成/响应 `X-Trace-ID`，对应 TODO 7。
+- **审计日志**：尚未实现，MVP 之后按 TODO 6 落地审计字段和可靠链路。
+- **安全增强**：来源网段校验、HTTP 安全头未上线，参考 TODO 8。
+- **过载保护**：缺少网关级并发上限，计划在 TODO 9 引入信号量和 `Retry-After`。
+- **RequestID**：当前未输出 `X-Request-ID`，后续只保留统一的 TraceID。
