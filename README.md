@@ -292,4 +292,5 @@ go test ./proxy ./config ./middleware/... ./client/...
 - **审计日志**：尚未实现，MVP 之后按 TODO 6 落地审计字段和可靠链路。
 - **安全增强**：来源网段校验、HTTP 安全头未上线，参考 TODO 8。
 - **过载保护**：缺少网关级并发上限，计划在 TODO 9 引入信号量和 `Retry-After`。
+- **RateLimit 响应头**：当前仅记录限流指标，未在响应中返回 `RateLimit-*`/`Retry-After` 头，后续由 TODO 4 落地。
 - **RequestID**：当前未输出 `X-Request-ID`，后续只保留统一的 TraceID。
