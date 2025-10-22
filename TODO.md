@@ -90,10 +90,35 @@
    - 状态：规划中
 
 10. **网关→后端服务间认证（重点）**
-    - 目标：在网关向后端 gRPC 服务发起调用时，提供统一的服务间认证能力，避免仅依赖客户端传入的凭据。
+   - 目标：在网关向后端 gRPC 服务发起调用时，提供统一的服务间认证能力，避免仅依赖客户端传入的凭据。
+   - 方案草案：
+     - 支持 mTLS：在 `tls_store` 配置客户端证书，后端启用双向 TLS。
+     - 支持自定义凭据：在转发前注入服务级 Token（JWT/API Key），以 gRPC Metadata/HTTP Header 方式传递。
+     - 可与 metadata 注入/authorize 中间件结合，根据路由或来源生成不同凭据。
+   - 负责人：平台（待指派）
+   - 状态：规划中
+
+11. **日志接入 Cloud Logging（gclog）**
+    - 目标：切换 Kratos 默认 `stdLogger`，统一输出 Cloud Logging 兼容 JSON，便于与平台日志/Trace 集成。
     - 方案草案：
-      - 支持 mTLS：在 `tls_store` 配置客户端证书，后端启用双向 TLS。
-      - 支持自定义凭据：在转发前注入服务级 Token（JWT/API Key），以 gRPC Metadata/HTTP Header 方式传递。
-      - 可与 metadata 注入/authorize 中间件结合，根据路由或来源生成不同凭据。
+      1. 在 `cmd/gateway/main.go` 初始化阶段引入 `github.com/bionicotaku/lingo-utils/gclog`：
+         ```go
+         logger, err := gclog.NewLogger(
+             gclog.WithService("gateway"),
+             gclog.WithVersion("2025.10.22"),
+             gclog.WithEnvironment("dev"),
+             gclog.WithStaticLabels(map[string]string{"team": "platform"}),
+         )
+         if err != nil { panic(err) }
+         log.SetLogger(logger)
+         ```
+      2. 若现有日志包含自定义键（超出 `message/trace_id/span_id/payload/labels/http_request/error` 等允许列表），需通过 `gclog.WithAllowedKeys` 或 `gclog.WithAllowedLabelKeys` 注册，避免 `gclog: unsupported log field` 错误。
+      3. 结合 TODO 7 的 TraceID 中间件，在 `logging.WithFields`/自定义中间件中调用 `gclog.AppendTrace`、`gclog.WithLabels` 等 helper 注入 `trace_id`、`request_id`、用户信息、HTTP 摘要等。
+      4. 如需输出源文件/行号，可开启 `gclog.EnableSourceLocation()`；生产环境注意性能开销。
+      5. 提供测试替换方案：单测可使用 `gclog.NewTestLogger`，断言输出 JSON 内容。
+    - 注意事项：
+      - `WithService`、`WithVersion` 为必填项。
+      - 默认输出目标是 stdout，可通过 `WithWriter` 跳转到其它 writer。
+      - 切换后所有 `log.Infof` / `logging` middleware 会直接输出 Cloud Logging 结构，需确认日志采集链路（Cloud Logging / Loki / ELK 等）已兼容 JSON。
     - 负责人：平台（待指派）
     - 状态：规划中
