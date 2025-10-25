@@ -18,9 +18,11 @@ import (
 	"github.com/google/uuid"
 )
 
-var ErrCancelWatch = errors.New("cancel watch")
-var globalServiceWatcher = newServiceWatcher()
-var LOG = log.NewHelper(log.With(log.GetLogger(), "source", "servicewatch"))
+var (
+	ErrCancelWatch       = errors.New("cancel watch")
+	globalServiceWatcher = newServiceWatcher()
+	LOG                  = log.NewHelper(log.With(log.GetLogger(), "source", "servicewatch"))
+)
 
 var _initialResolveTimeout = time.Duration(0)
 

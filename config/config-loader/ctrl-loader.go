@@ -12,7 +12,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-
 	"strings"
 	"time"
 
@@ -137,7 +136,7 @@ func (c *CtrlConfigLoader) Load(ctx context.Context) (err error) {
 		return err
 	}
 	tmpPath := fmt.Sprintf("%s.%s.tmp", c.dstPath, uuid.New().String())
-	if err := os.WriteFile(tmpPath, yamlBytes, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, yamlBytes, 0o644); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, c.dstPath); err != nil {
@@ -187,7 +186,7 @@ func (c *CtrlConfigLoader) writePriorityConfigs(resp *LoadResponse) error {
 			return err
 		}
 		tmpPath := path.Join(c.dstPriorityConfigDir, fmt.Sprintf("%s.yaml.tmp", item.Key))
-		if err := os.WriteFile(tmpPath, yamlBytes, 0644); err != nil {
+		if err := os.WriteFile(tmpPath, yamlBytes, 0o644); err != nil {
 			return err
 		}
 		dstName := path.Join(c.dstPriorityConfigDir, fmt.Sprintf("%s.yaml", item.Key))

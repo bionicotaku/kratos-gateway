@@ -17,13 +17,17 @@ import (
 	"github.com/go-kratos/gateway/middleware"
 )
 
-var _ selector.Node = &node{}
-var _dialTimeout = 200 * time.Millisecond
-var followRedirect = false
+var (
+	_              selector.Node = &node{}
+	_dialTimeout                 = 200 * time.Millisecond
+	followRedirect               = false
+)
 
-var _globalClient *http.Client = nil
-var _globalH2CClient *http.Client = nil
-var _globalHTTPSClient *http.Client = nil
+var (
+	_globalClient      *http.Client = nil
+	_globalH2CClient   *http.Client = nil
+	_globalHTTPSClient *http.Client = nil
+)
 
 func init() {
 	var err error

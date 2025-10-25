@@ -39,14 +39,12 @@ func SetBuildContext(buildContext *client.BuildContext) {
 	clientBuildContext.Store(buildContext)
 }
 
-var (
-	_metricDeniedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "go",
-		Subsystem: "gateway",
-		Name:      "requests_circuit_breaker_denied_total",
-		Help:      "The total number of denied requests",
-	}, []string{"protocol", "method", "path", "service", "basePath"})
-)
+var _metricDeniedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "go",
+	Subsystem: "gateway",
+	Name:      "requests_circuit_breaker_denied_total",
+	Help:      "The total number of denied requests",
+}, []string{"protocol", "method", "path", "service", "basePath"})
 
 type ratioTrigger struct {
 	*v1.CircuitBreaker_Ratio

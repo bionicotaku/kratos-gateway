@@ -53,7 +53,7 @@ func NewFileLoader(confPath string, priorityDirectory string) (*FileLoader, erro
 
 func (f *FileLoader) initialize() error {
 	if f.priorityDirectory != "" {
-		if err := os.MkdirAll(f.priorityDirectory, 0755); err != nil {
+		if err := os.MkdirAll(f.priorityDirectory, 0o755); err != nil {
 			return err
 		}
 	}

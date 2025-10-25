@@ -10,9 +10,7 @@ import (
 	"github.com/go-kratos/gateway/proxy/condition"
 )
 
-var (
-	retryFeature = feature.MustRegister("gw:Retry", true)
-)
+var retryFeature = feature.MustRegister("gw:Retry", true)
 
 type retryStrategy struct {
 	attempts      int

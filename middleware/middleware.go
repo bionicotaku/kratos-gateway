@@ -22,11 +22,13 @@ func (f RoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-type FactoryV2 func(*configv1.Middleware) (MiddlewareV2, error)
-type MiddlewareV2 interface {
-	Process(http.RoundTripper) http.RoundTripper
-	io.Closer
-}
+type (
+	FactoryV2    func(*configv1.Middleware) (MiddlewareV2, error)
+	MiddlewareV2 interface {
+		Process(http.RoundTripper) http.RoundTripper
+		io.Closer
+	}
+)
 
 func wrapFactory(in Factory) FactoryV2 {
 	return func(m *configv1.Middleware) (MiddlewareV2, error) {

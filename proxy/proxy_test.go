@@ -232,5 +232,4 @@ func TestRetryBreaker(t *testing.T) {
 			t.FailNow()
 		}
 	})
-
 }

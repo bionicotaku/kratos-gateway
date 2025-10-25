@@ -54,12 +54,14 @@ type sliceVar struct {
 func newSliceVar(defaultVal ...string) sliceVar {
 	return sliceVar{defaultVal: defaultVal}
 }
+
 func (s *sliceVar) Get() []string {
 	if len(s.val) <= 0 {
 		return s.defaultVal
 	}
 	return s.val
 }
+
 func (s *sliceVar) Set(val string) error {
 	s.val = append(s.val, val)
 	return nil

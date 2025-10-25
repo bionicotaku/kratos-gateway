@@ -57,7 +57,6 @@ func Middleware(c *config.Middleware) (middleware.Middleware, error) {
 				}
 				for _, value := range requestHeadersRewrite.Remove {
 					req.Header.Del(value)
-
 				}
 			}
 			resp, err := next.RoundTrip(req)
@@ -73,7 +72,6 @@ func Middleware(c *config.Middleware) (middleware.Middleware, error) {
 				}
 				for _, value := range responseHeadersRewrite.Remove {
 					resp.Header.Del(value)
-
 				}
 			}
 			return resp, nil
